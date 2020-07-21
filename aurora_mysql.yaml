@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create the Aurora MySQL or PostgreSQL database(s). Currently, this template only supports alarms for Aurora MySQL.
+Parameters:
+  databaseUser:
+    Type: String
+    Description: Database admin account name
+    MinLength: 5
+    MaxLength: 16
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]*"
+    ConstraintDescription: Name must begin with a letter and contain only alphanumeric characters
+  databasePassword:
+    NoEcho: true
+    Type: String
+    Description: Database admin account password
+    MinLength: 6
+    MaxLength: 41
+    AllowedPattern: "[a-zA-Z0-9]*"
+    ConstraintDescription: Password must contain only alphanumeric characters
+  databaseName:
+    Type: String
+    Description: Database name
+    MinLength: 1
+    MaxLength: 30
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]*"
+    ConstraintDescription: Name must begin with a letter and contain only alphanumeric characters
+  engine:
+    Description: 'The name of the database engine that you want to use for this DB cluster.'
+    Type: String
+    Default: 'aurora-mysql'
+  engineMode:
+    Description: 'The name of the database engine mode that you want to use for this DB cluster. Serverless support only MYSQL5.6'
+    Type: String
+    Default: 'provisioned'
+  storageEncrypted:
+    Default: false
+    Type: String
+    Description: The optional flag for encryption at rest (db.t2.small and above)
+    ConstraintDescription: Only true or false are allowed
+    AllowedValues:
+      - true
+      - false
+  dBSnapshotIdentifier:
+    Description: 'Optional identifier for the DB cluster snapshot from which you want to restore (leave blank to create an empty cluster).'
+    Type: String
+    Default: ''
+  vpcId:
+    Type: String
+    Description: Enter your VPCID
+  publicSubnet1:
+    Type: String
+    Description: Enter your public subnet ID1
+  publicSubnet2:
+    Type: String
+    Description: Enter your public subnet ID2
+  publicSubnet3:
+    Type: String
+    Description: Enter your public subnet ID3
+  databaseInstanceClass:
+    Default: db.t2.small
+    Type: String
+    Description: "Database instance class, e.g. db.t2.micro (free tier) - Engine support: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.DBInstanceClass.html"
+  environmentName:
+    Description: Environment name - dev or prod
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+    ConstraintDescription: Specify either dev or prod
+
+Mappings:
+  EngineMap:
+    'aurora-mysql':
+      EngineVersion: '5.7.12'
+      Port: 3306
+      ClusterParameterGroupFamily: 'aurora-mysql5.7'
+      ParameterGroupFamily: 'aurora-mysql5.7'
+
+Conditions:
+  IsProd: !Equals [ !Ref environmentName, prod ]
+  HasDBSnapshotIdentifier: !Not [!Equals [!Ref dBSnapshotIdentifier, '']]
+Resources:
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      VpcId: !Ref 'vpcId'
+      GroupDescription: Access to database
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          FromPort: 3306
+          ToPort: 3306
+          IpProtocol: tcp
+      Tags: 
+        - Key: Name
+          Value: !Sub ${databaseName}-security-group
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Database subnet group
+      SubnetIds:
+        - !Ref publicSubnet1
+        - !Ref publicSubnet1
+        - !Ref publicSubnet3
+      Tags:
+      - Key: Name
+        Value: !Ref AWS::StackName
+  DBParameterGroup:
+    Type: 'AWS::RDS::DBParameterGroup'
+    Properties:
+      Description: !Ref 'AWS::StackName'
+      Family: !FindInMap [EngineMap, !Ref engine, ParameterGroupFamily]
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: !Ref engine
+      EngineVersion: !FindInMap [EngineMap, !Ref engine, EngineVersion]
+      EngineMode: !Ref engineMode
+      Port: !FindInMap [EngineMap, !Ref engine, Port]
+      DBClusterIdentifier: !Sub '${AWS::StackName}-DBCluster'
+      DBClusterParameterGroupName: 'default.aurora-mysql5.7'
+      MasterUsername: !Ref databaseUser
+      MasterUserPassword: !Ref databasePassword
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      StorageEncrypted: !Ref storageEncrypted
+      DatabaseName: !Ref databaseName
+      SnapshotIdentifier: !If [HasDBSnapshotIdentifier, !Ref dBSnapshotIdentifier, !Ref 'AWS::NoValue']
+      VpcSecurityGroupIds:
+        - Ref: DatabaseSecurityGroup
+    DependsOn: DatabaseSubnetGroup
+  AuroraInstance0:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: !Ref engine
+      PubliclyAccessible: true
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-DBInstance0'
+      DBParameterGroupName: !Ref DBParameterGroup
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: !Ref databaseInstanceClass
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      StorageEncrypted: !Ref storageEncrypted
+      CopyTagsToSnapshot: false
+      Tags:
+      - Key: Name
+        Value: !Ref AWS::StackName
+    DependsOn: AuroraCluster
+  AuroraInstance1:
+    Type: AWS::RDS::DBInstance
+    Condition: IsProd
+    Properties:
+      Engine: !Ref engine
+      PubliclyAccessible: true
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-DBInstance1'
+      DBParameterGroupName: !Ref DBParameterGroup
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: !Ref databaseInstanceClass
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      StorageEncrypted: !Ref storageEncrypted
+      CopyTagsToSnapshot: false
+      Tags:
+      - Key: Name
+        Value: !Ref AWS::StackName
+    DependsOn: AuroraCluster
+
+Outputs:
+  Name:
+    Description: Aurora Stack Name
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub ${AWS::StackName}-Name
+  AuroraClusterId:
+    Description: Aurora Cluster ID
+    Value: !Ref AuroraCluster
+    Export:
+      Name: !Sub ${AWS::StackName}-AuroraClusterID
+  AuroraWriteDbURL:
+    Description: Aurora Database URL
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseURL
+  AuroraReadDbURL:
+    Description: Aurora Database Read URL
+    Value: !GetAtt AuroraCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseReadURL
+  DbUser:
+    Description: RDS Database admin account user
+    Value: !Ref databaseUser
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseUser

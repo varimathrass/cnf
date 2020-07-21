@@ -1,0 +1,207 @@
+---
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'State: ElastiCache memcached, a cloudonaut.io template, sponsored by https://github.com/ngault'
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'Parent Stacks'
+      Parameters:
+      - parentVPCStack
+      - parentClientStack
+      - parentZoneStack
+      - parentSSHBastionStack
+      - parentAlertStack
+    - Label:
+        default: 'ElastiCache Parameters'
+      Parameters:
+      - CacheNodeType
+      - NumCacheNodes
+      - SubDomainNameWithDot
+    - Label:
+        default: 'Operational Parameters'
+      Parameters:
+      - LogsRetentionInDays
+Conditions:
+  HasZone: !Not [!Equals [!Ref parentZoneStack, '']]
+  HasAlertTopic: !Not [!Equals [!Ref parentAlertStack, '']]
+
+Parameters:
+  cacheClusterEngine:
+    Type: String
+    Description: 'Engine for cache cluster redis or memcached.'
+    AllowedValues: ['redis', 'memcached']
+    Default: 'redis'
+
+  cacheParameterGroupFamily:
+    Type: String
+    Description: 'Chose your version of Cache Parameter Group.'
+    AllowedValues: ['redis4.0', 'redis5.0']
+    Default: 'redis4.0'
+  
+  port:
+    Type: String
+    Description: 'Port for ElastiCache ReplicationGroup.'
+    Default: 6379
+
+  parentAlertStack:
+    Description: 'Optional but recommended stack name of parent alert stack based on operations/alert.yaml template.'
+    Type: String
+    Default: ''
+
+  parentZoneStack:
+    Description: 'Optional stack name of parent zone stack based on vpc/vpc-zone-*.yaml template.'
+    Type: String
+    Default: ''
+
+  subDomainName:
+    Description: 'Name that is used to create the DNS entry §{SubDomainName}.§{HostedZoneName} (required when parentZoneStack is set, otherwise not considered)'
+    Type: String
+    Default: redis
+
+  parentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+
+  cacheNodeType:
+    Description: 'The compute and memory capacity of the nodes in the node group (shard).'
+    Type: 'String'
+    Default: 'cache.t2.micro'
+
+  automaticFailoverEnabled:
+    Type: String
+    Description: 'Indicates whether Multi-AZ is enable you must specify a value greater than 1 for the NumCacheClusters property.'
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  numCacheNodes:
+    Description: 'The initial number of cache nodes that the cluster has.'
+    Type: 'Number'
+    Default: 1
+  
+  autoMinorVersionUpgrade:
+    Description: 'Auto minor version upgrade true or false.'
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+  
+  transitEncryption:
+    Description: 'Enable encryption for data in transit? When transit encryption is enabled also specify an auth token.'
+    Type: 'String'
+    Default: 'false'
+    AllowedValues:
+    - 'true'
+    - 'false'
+  
+  atRestEncryptionEnabled:
+    Description: 'Enable encryption for data in ATRest.'
+    Type: 'String'
+    Default: 'false'
+    AllowedValues:
+    - 'true'
+    - 'false'
+
+Resources:
+  RecordSet:
+    Condition: HasZone
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      HostedZoneId:
+        'Fn::ImportValue': !Sub '${parentZoneStack}-HostedZoneId'
+      Name: !Sub
+      - '${subDomainName}.${HostedZoneName}'
+      - SubDomainName: !Ref subDomainName
+        HostedZoneName:
+          'Fn::ImportValue': !Sub '${parentZoneStack}-HostedZoneName'
+      ResourceRecords:
+      - !GetAtt 'RedisCluster.PrimaryEndPoint.Address'
+      TTL: '60'
+      Type: CNAME
+
+  CacheParameterGroupName: #The solution for update to this was to change the resource name for the parameter group which essentially creates a new parameter group.
+    Type: 'AWS::ElastiCache::ParameterGroup'
+    Properties:
+      CacheParameterGroupFamily: !Ref cacheParameterGroupFamily
+      Description: !Ref 'AWS::StackName'
+      Properties: {
+        "maxmemory-policy" : "volatile-lru"
+      }
+  
+  CacheSubnetGroupName:
+    Type: 'AWS::ElastiCache::SubnetGroup'
+    Properties:
+      Description: !Ref 'AWS::StackName'
+      SubnetIds: !Split [',', {'Fn::ImportValue': !Sub '${parentVPCStack}-SubnetsPrivate'}]
+  
+  SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Ref 'AWS::StackName'
+      VpcId: {'Fn::ImportValue': !Sub '${parentVPCStack}-VPC'}
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: tcp
+        FromPort: !Ref port
+        ToPort: !Ref port
+  
+  RedisCluster:
+    #DeletionPolicy: Snapshot # Snapshot not supported
+    Type: 'AWS::ElastiCache::ReplicationGroup'
+    Properties:
+      #ReplicationGroupId: !Sub ${AWS::StackName} #CloudFormation cannot update a stack when a custom-named resource requires replacing. Rename test-redis and update the stack again.
+      AutomaticFailoverEnabled: !Ref automaticFailoverEnabled
+      AutoMinorVersionUpgrade: !Ref autoMinorVersionUpgrade
+      CacheNodeType: !Ref cacheNodeType
+      CacheParameterGroupName: !Ref CacheParameterGroupName
+      CacheSubnetGroupName: !Ref CacheSubnetGroupName
+      Engine: !Ref cacheClusterEngine
+      EngineVersion: '4.0.10'
+      Port: !Ref port
+      NumCacheClusters: !Ref numCacheNodes
+      #ReplicasPerNodeGroup: 1
+      #NumNodeGroups: 1
+      #NodeGroupConfiguration:
+      ReplicationGroupDescription: !Sub ${AWS::StackName}-ReplicationGroup-${AWS::Region}
+      PreferredMaintenanceWindow: 'sat:07:00-sat:08:00'
+      TransitEncryptionEnabled: !Ref transitEncryption
+      AtRestEncryptionEnabled: !Ref atRestEncryptionEnabled
+      SecurityGroupIds:
+      - !Ref SecurityGroup
+
+  RedisCPUUtilizationTooHighAlarm:
+    #Condition: HasAlertTopic
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'Average CPU utilization over last 10 minutes higher than 70%.'
+      Namespace: 'AWS/ElastiCache'
+      MetricName: CPUUtilization
+      Statistic: Average
+      Period: 600
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 70
+      AlarmActions:
+      - 'Fn::ImportValue': !Sub 'arn:aws:sns:eu-west-1:278900400641:serverlessrepo-sns-to-telegram'
+      Dimensions:
+      - Name: CacheClusterId
+        Value: !Ref RedisCluster
+
+Outputs:
+  ClusterName:
+    Description: 'The name of the cluster'
+    Value: !Ref RedisCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterName'
+  
+  PrimaryEndPointAddress:
+    Description: 'Primary Endpoint Address of endpoint for the Redis cache cluster.'
+    Value: !GetAtt 'RedisCluster.PrimaryEndPoint.Address'
+    Export:
+      Name: !Sub '${AWS::StackName}-PrimaryEndPointAddress'
+
+  PrimaryEndPointPort:
+    Description: Primary Endpoint Port of endpoint for the Redis cache cluster.
+    Value: !GetAtt RedisCluster.PrimaryEndPoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-PrimaryEndPointPort'

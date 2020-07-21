@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Metadata: 
+  License: Apache-2.0
+Description: 'AWS CloudFormation Template for ElasticSearch service'
+Parameters:
+  domainName:
+    Type: String
+    Description: "Es http domain name"
+  instanceCount:
+    Type: String
+    Default: 1
+  instanceType:
+    Type: String
+    Default: "m4.large.elasticsearch"
+  dedicatedMasterType:
+    Type: String
+    Default: "m4.large.elasticsearch"
+  dedicatedMasterCount:
+    Type: Number
+    Default: 0
+  zoneAwareness:
+    Type: String
+    Default: false
+  ebsVolumeSize:
+    Type: Number
+    Default: 50
+  elasticsearchVersion:
+    Type: String
+    Default: "5.6"
+
+Conditions:
+  #HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
+  #HasSingleClusterInstance: !Equals [!Ref ClusterInstanceCount, '1']
+  HasDedicatedMasterNodes: !Not [!Equals [!Ref dedicatedMasterCount, 0]]
+
+Resources:
+  ElasticsearchDomain: 
+    Type: AWS::Elasticsearch::Domain
+    Properties:
+      DomainName: !Ref domainName
+      ElasticsearchClusterConfig: 
+        DedicatedMasterEnabled: !If [HasDedicatedMasterNodes, true, false]
+        InstanceCount: !Ref instanceCount
+        ZoneAwarenessEnabled: !Ref zoneAwareness
+        InstanceType: !Ref instanceType
+        DedicatedMasterType: !If [HasDedicatedMasterNodes, !Ref dedicatedMasterType, !Ref 'AWS::NoValue']
+        DedicatedMasterCount: !If [HasDedicatedMasterNodes, !Ref dedicatedMasterCount, !Ref 'AWS::NoValue']
+      EBSOptions: 
+        EBSEnabled: true
+        Iops: 0
+        VolumeSize: !Ref ebsVolumeSize
+        VolumeType: "gp2"
+      ElasticsearchVersion: "5.6"
+      SnapshotOptions: 
+        AutomatedSnapshotStartHour: "0"
+      AccessPolicies: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              AWS: "*"
+            Action: "es:*"
+            Resource: !Sub "arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${domainName}/*"
+      AdvancedOptions: 
+        rest.action.multi.allow_explicit_index: "true"
+
+Outputs:
+  DNSName:
+    Description: "The domain-specific endpoint that's used to submit index, search, and data upload requests to an Amazon ES domain."
+    Value: !GetAtt 'ElasticsearchDomain.DomainEndpoint'
+    Export:
+      Name: !Sub '${AWS::StackName}-DNSName'

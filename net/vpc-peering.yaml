@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create a VPC and a VPC Peering connection using the PeerRole to accept.
+Metadata:
+  cfn-lint:
+    config:
+      regions:
+      - eu-west-1
+      ignore_checks:
+      - E3008
+Parameters:
+  PeerVPCAccountId:
+    Type: String
+    Description: Peer VPC Account ID
+    AllowedPattern: ^[0-9]+$
+    ConstraintDescription: Peer Owner ID
+  PeerVPCId:
+    Type: String
+    Description: VPC Peer ID
+  #PeerRoleArn:
+  #  Type: String
+  #  Description: Peer Role ARN
+  #  AllowedPattern: ^(arn:aws:iam::[0-9]+:[a-z]*/[A-Za-z0-9-]+)$
+  #  ConstraintDescription: Peer ARN         # TODO attach role to this template
+  VpcId:
+    Type: String
+    Description: VPC ID
+    AllowedPattern: ^(vpc-[a-f0-9]{17})$
+    ConstraintDescription: Valid VPC ID
+Outputs:
+  VPCPeeringConnectionId:
+    Value: !Ref 'VpcPeeringConnection'
+    Description: VPC Peering Connection ID
+Resources:
+  VpcPeeringConnection:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      VpcId: !Ref 'VpcId'
+      PeerVpcId: !Ref 'PeerVPCId'
+      PeerOwnerId: !Ref 'PeerVPCAccountId'
+      #PeerRoleArn: !Ref 'PeerRoleArn'

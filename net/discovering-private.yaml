@@ -1,0 +1,37 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ''
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'Parent Stacks'
+      Parameters:
+      - ParentVPCStack
+    - Label:
+        default: 'Zone Parameters'
+      Parameters:
+      - ZoneName
+Parameters:
+  ParentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+  ZoneName:
+    Description: 'The name of the discovering zone'
+    Type: String
+Resources:
+  PrivateDiscoveringZone:
+    Type: "AWS::ServiceDiscovery::PrivateDnsNamespace"
+    Properties:
+      Description: String
+      Vpc: {'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'}
+      Name: !Ref ZoneName
+Outputs:
+  StackName:
+    Description: 'Stack name.'
+    Value: !Sub '${AWS::StackName}'
+  DisPrivateZoneId:
+    Description: 'The ID of the private discovering zone.'
+    Value: !Ref PrivateDiscoveringZone
+    Export:
+      Name: !Sub '${AWS::StackName}-DisPrivateZoneId'

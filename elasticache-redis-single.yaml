@@ -1,0 +1,189 @@
+---
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'State: ElastiCache memcached, a cloudonaut.io template, sponsored by https://github.com/ngault'
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'Parent Stacks'
+      Parameters:
+      - parentVPCStack
+      - parentClientStack
+      - ParentZoneStack
+      - parentSSHBastionStack
+      - parentAlertStack
+    - Label:
+        default: 'ElastiCache Parameters'
+      Parameters:
+      - CacheNodeType
+      - NumCacheNodes
+      - SubDomainNameWithDot
+    - Label:
+        default: 'Operational Parameters'
+      Parameters:
+      - LogsRetentionInDays
+
+Conditions:
+  HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
+  #HasAlertTopic: !Not [!Equals [!Ref parentAlertStack, '']]
+
+Parameters:
+  cacheClusterEngine:
+    Type: String
+    Description: 'Engine for cache cluster redis or memcached.'
+    AllowedValues: ['redis', 'memcached']
+    Default: 'redis'
+
+  engineVersion:
+    Type: String
+    Description: 'Engine version for Redis.'
+    AllowedValues: ['4.0.10', '5.0.0']
+    Default: '4.0.10'
+
+  cacheParameterGroupFamily:
+    Type: String
+    Description: 'Chose your version of Cache Parameter Group.'
+    AllowedValues: ['redis4.0', 'redis5.0']
+    Default: 'redis4.0'
+
+  port:
+    Type: String
+    Description: 'Port for ElastiCache Redis.'
+    Default: 6379
+
+  # parentAlertStack:
+  #   Description: 'Optional but recommended stack name of parent alert stack based on operations/alert.yaml template.'
+  #   Type: String
+  #   Default: ''
+
+  parentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+
+  ParentZoneStack:
+    Description: 'Optional stack name of parent zone stack based on vpc/vpc-zone-*.yaml template.'
+    Type: String
+    Default: ''
+
+  cacheNodeType:
+    Description: 'The compute and memory capacity of the nodes in the node group (shard).'
+    Type: 'String'
+    Default: 'cache.t2.micro'
+
+  numCacheNodes:
+    Description: 'The initial number of cache nodes that the cluster has.'
+    Type: 'Number'
+    Default: 1
+  
+  autoMinorVersionUpgrade:
+    Description: 'Auto minor version upgrade true or false.'
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  aZMode:
+    Type: String
+    AllowedValues: ['single-az', 'cross-az']
+    Default: 'single-az'
+  
+  SubDomainName:
+    Description: 'Name that is used to create the DNS entry §{SubDomainName}.§{HostedZoneName} (required when ParentZoneStack is set, otherwise not considered)'
+    Type: String
+    Default: redis
+
+  ArnSnsToTelegram:
+    Description: 'Arn for SNS which will call sns-to-telegram app'
+    Type: String
+    Default: 'arn:aws:sns:eu-west-1:278900400641:sam-alarm-to-telegram'
+
+Resources:
+  CacheParameterGroupName:
+    Type: 'AWS::ElastiCache::ParameterGroup'
+    Properties:
+      CacheParameterGroupFamily: !Ref cacheParameterGroupFamily
+      Description: !Ref 'AWS::StackName'
+      Properties: {
+        "maxmemory-policy" : "volatile-lru"
+      }
+  
+  CacheSubnetGroupName:
+    Type: 'AWS::ElastiCache::SubnetGroup'
+    Properties:
+      Description: !Ref 'AWS::StackName'
+      SubnetIds: !Split [',', {'Fn::ImportValue': !Sub '${parentVPCStack}-SubnetsPrivate'}]
+  
+  SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Ref 'AWS::StackName'
+      VpcId: {'Fn::ImportValue': !Sub '${parentVPCStack}-VPC'}
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: tcp
+        FromPort: !Ref port
+        ToPort: !Ref port
+  
+  CacheCluster:
+    # DeletionPolicy: Snapshot # Snapshot not supported
+    Type: 'AWS::ElastiCache::CacheCluster'
+    Properties:
+      #ClusterName: !Sub ${AWS::StackName}-Cluster #The name must contain 1 to 20 alphanumeric characters or hyphens.
+      AutoMinorVersionUpgrade: !Ref autoMinorVersionUpgrade
+      AZMode: !Ref aZMode
+      CacheNodeType: !Ref cacheNodeType
+      CacheParameterGroupName: !Ref CacheParameterGroupName
+      CacheSubnetGroupName: !Ref CacheSubnetGroupName
+      Engine: !Ref cacheClusterEngine
+      EngineVersion: !Ref engineVersion
+      Port: !Ref port
+      NumCacheNodes: !Ref numCacheNodes
+      PreferredMaintenanceWindow: 'sat:07:00-sat:08:00'
+      VpcSecurityGroupIds:
+      - !Ref SecurityGroup
+
+  RecordSet:
+    Condition: HasZone
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      HostedZoneId:
+        'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'
+      Name: !Sub
+      - '${SubDomainName}.${HostedZoneName}'
+      - SubDomainName: !Ref SubDomainName
+        HostedZoneName:
+          'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'
+      ResourceRecords:
+      - !GetAtt 'CacheCluster.RedisEndpoint.Address'
+      TTL: '60'
+      Type: CNAME
+
+  RedisCPUUtilizationTooHighAlarm:
+    #Condition: HasAlertTopic
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'Average CPU utilization over last 10 minutes higher than 70%.'
+      Namespace: 'AWS/ElastiCache'
+      MetricName: CPUUtilization
+      Statistic: Average
+      Period: 600
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 70
+      AlarmActions:
+      - !Ref ArnSnsToTelegram
+      Dimensions:
+      - Name: CacheClusterId
+        Value: !Ref CacheCluster
+
+Outputs:
+  ClusterName:
+    Description: 'The name of the cluster'
+    Value: !Ref CacheCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterName'
+  DNSName:
+    Description: 'Primary Endpoint Address of endpoint for the Redis cache cluster.'
+    Value: !GetAtt 'CacheCluster.RedisEndpoint.Address'
+    Export:
+      Name: !Sub '${AWS::StackName}-DNSName'

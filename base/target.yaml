@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Target account management t
+
+Parameters:
+ ManagementAccountID:
+    Type: String
+    Description: Account ID of management account
+
+Conditions:
+  IAMRegion: !Equals [ !Ref 'AWS::Region', 'us-east-1' ]
+
+Resources:
+  ContainmentPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Deny
+            Action:
+              - iam:Detach*
+            Resource: '*'
+            Condition:
+              ArnLike:
+                iam:PolicyArn: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/*'
+          -
+            Effect: Deny
+            Action:
+              - iam:DeletePolicy
+              - iam:DeletePolicyVersion
+              - iam:SetDefaultPolicyVersion
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/*'
+          -
+            Effect: Deny
+            Action:
+              - sts:AssumeRole
+              - iam:PassRole
+              - iam:DeleteRole
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:UpdateAssumeRolePolicy
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/*'
+          # TODO: Config
+
+
+  ############################
+  # Roles for administration #
+  ############################
+
+  AdministratorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: Administrator
+      Path: '/'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+        - !Ref ContainmentPolicy
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${ManagementAccountID}:user/alexey.burdash'
+            Action:
+              - sts:AssumeRole
+
+  PowerUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: PowerUser
+      Path: '/'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+        - !Ref ContainmentPolicy
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${ManagementAccountID}:user/alexey.burdash'
+            Action:
+              - sts:AssumeRole
+
+  ReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ReadOnly
+      Path: '/'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - !Ref ContainmentPolicy
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${ManagementAccountID}:user/alexey.burdash'
+            Action:
+              - sts:AssumeRole
+
+  SecurityAuditRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SecurityAudit
+      Path: '/'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - !Ref ContainmentPolicy
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${ManagementAccountID}:user/alexey.burdash'
+            Action:
+              - sts:AssumeRole

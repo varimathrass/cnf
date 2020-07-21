@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Template creates a Network Load Balancer in 2 AZs with EIPs listening\
+  \ on TCP port 80. There are no registered targets these would either be EC2 instance\
+  \ IDs added to the targets property of the target group  or defined under the autoscaling\
+  \ group resources  "
+
+Parameters:
+  ParentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+  ELBType:
+    Type: String
+    Default: network
+  ELBIpAddressType:
+    Type: String
+    AllowedValues:
+      - ipv4
+      - dualstack
+    Default: ipv4
+
+Resources:
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: 'internet-facing'
+      Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentVPCStack}-SubnetsPublic'}]
+      Type: !Ref 'ELBType'
+      IpAddressType: !Ref 'ELBIpAddressType'
+
+  ProdRedisTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 6379
+      Protocol: TCP
+      TargetType: ip
+      Targets:
+      - Id: '10.1.19.105'
+        Port: 6379
+      VpcId: {'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'}
+
+  ListenerProdRedis:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref 'ProdRedisTargetGroup'
+      LoadBalancerArn: !Ref 'LoadBalancer'
+      Port: 6379
+      Protocol: TCP
+
+Outputs:
+  URL:
+    Description: 'URL to the NLB.'
+    Value: !Sub 'http://${LoadBalancer.DNSName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-URL'

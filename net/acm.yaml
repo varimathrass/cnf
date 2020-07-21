@@ -1,0 +1,14 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Acm cert creation"
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: 'Domain name for ca'
+
+Resources:
+  AcmCert:
+    Type: AWS::CertificateManager::Certificate
+    Properties: 
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS

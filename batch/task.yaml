@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates a AWS Batch environment, includes IAM resources and Batch resources.
+Parameters:
+  memory:
+    Type: String
+    Description: The hard limit (in MiB) of memory to present to the container. If your container attempts to exceed the memory specified here, the container is killed.
+    Default: 200
+  
+  vcpus:
+    Type: String
+    Description: The number of vCPUs reserved for the container.
+    Default: 1
+
+  image:
+    Type: String
+    Description: The image used to start a container.
+    Default: jesus10/helloworld:latest
+
+Resources:
+  BatchTaskRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-task-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - 
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ecs-tasks.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+  
+  SyncProducts:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      Type: container
+      ContainerProperties:
+        Image: !Ref image
+        Vcpus: !Ref vcpus
+        Memory: !Ref memory
+        Command: ["php","-d","default_socket_timeout=7200","-d","memory_limit=1G","bin/console","lapti:one-c:synchronization:products"]
+        JobRoleArn: !Ref BatchTaskRole
+      JobDefinitionName: !Sub ${AWS::StackName}-SyncProducts
+      RetryStrategy:
+        Attempts: 1
+  
+  SyncProductsPrices:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      Type: container
+      ContainerProperties:
+        Image: !Ref image
+        Vcpus: !Ref vcpus
+        Memory: !Ref memory
+        Command: ["php","-d","memory_limit=1G","bin/console","lapti:one-c:synchronization:products-prices"]
+        JobRoleArn: !Ref BatchTaskRole
+      JobDefinitionName: !Sub ${AWS::StackName}-SyncProductsPrices
+      RetryStrategy:
+        Attempts: 1
+  
+  SyncProductsStoreStock:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      Type: container
+      ContainerProperties:
+        Image: !Ref image
+        Vcpus: !Ref vcpus
+        Memory: !Ref memory
+        Command: ["php","-d","default_socket_timeout=7200","-d","memory_limit=1G","bin/console","lapti:one-c:synchronization:products-store-stock"]
+        JobRoleArn: !Ref BatchTaskRole
+      JobDefinitionName: !Sub ${AWS::StackName}-SyncProductsStoreStock
+      RetryStrategy:
+        Attempts: 1
+
+Outputs:
+  SyncProducts:
+    Value: !Ref 'SyncProducts'
+  SyncProductsPrices:
+    Value: !Ref 'SyncProductsPrices'
+  SyncProductsStoreStock:
+    Value: !Ref 'SyncProductsStoreStock'

@@ -1,0 +1,587 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: This stack creates a codepipeline for the App to be used with the ECS Cluster
+Parameters:
+ # EnvironmentName:
+ #   Type: String
+ #   Description: An environment name that will be prefixed to resource names
+ #   Default: Dev
+ #   AllowedValues:
+ #     - Dev
+ #     - Stage
+ #     - Prod
+ #   ConstraintDescription: Specify either Dev Prod or Stage
+
+  NameSpace:
+    Description: Enter Project Name.
+    Type: String
+
+  ClusterStackName:
+    Type: String
+    Description: Cluster stack name for import values
+
+  RcStackName:
+    Type: String
+    Description: Stage service cf stack name
+
+  ProdStackName:
+    Type: String
+    Description: Prod service cf stack name
+
+  ParentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+
+  EcrRepo:
+    Type: String
+    Description: Ecr repo name
+
+  SourceRepo:
+    Type: String
+    Description: CodeCommit repo name
+
+  SourceBranch:
+    Type: String
+    Default: master
+    Description: CodeCommit repository branch - change triggers a new build
+
+  CodeBuildDockerImage:
+    Type: String
+    Default: aws/codebuild/docker:18.09.0
+
+  BuildDockerFile:
+    Type: String
+    Default: app.Dockerfile
+
+  BuildWebDockerFile:
+    Type: String
+    Default: web.Dockerfile
+    
+  ProdImageDefinitions:
+    Type: String
+    Default: imagedefinitions.json
+
+  SSMParametersPath:
+    Type: String
+    Default: '/no/params/'
+
+  SourceArtifactBucket:
+    Type: String
+    Default: srecitrus
+
+  SourceArtifactKey:
+    Type: String
+    Default: ''
+
+  StaticBucketName:
+    Type: String
+    Default: 'i.citrus.ua'
+  
+  TimeoutInMinutes:
+    Type: Number
+    Default: 15
+
+Conditions:
+  HasS3Artifact: !Not [!Equals [!Ref SourceArtifactKey, '']]
+
+Resources: 
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+        RoleName: !Sub ${AWS::StackName}-codepipeline
+        AssumeRolePolicyDocument:
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action:
+            - sts:AssumeRole
+        Path: "/"
+        Policies:
+        - PolicyName: !Sub ${AWS::StackName}-codepipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+                - s3:PutObject
+                Resource: 
+                  - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codebuild/*
+                  - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codepipeline/*
+                  - !Sub arn:${AWS::Partition}:s3:::${SourceArtifactBucket}/${NameSpace}/*
+                Effect: Allow
+              - Action:
+                - s3:GetBucketVersioning
+                Resource: 
+                  - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codebuild
+                  - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codepipeline
+                  - !Sub arn:${AWS::Partition}:s3:::${SourceArtifactBucket}
+                Effect: Allow
+              - Action:
+                  - elasticbeanstalk:CreateApplicationVersion
+                  - elasticbeanstalk:DescribeApplicationVersions
+                  - elasticbeanstalk:DescribeEnvironments
+                  - elasticbeanstalk:DescribeEvents
+                  - elasticbeanstalk:UpdateEnvironment
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeLaunchConfigurations
+                  - autoscaling:DescribeScalingActivities
+                  - autoscaling:ResumeProcesses
+                  - autoscaling:SuspendProcesses
+                  - cloudformation:GetTemplate
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:UpdateStack
+                  - cloudformation:CreateStack
+                  - ec2:DescribeInstances
+                  - ec2:DescribeImages
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeKeyPairs
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - rds:DescribeDBInstances
+                  - rds:DescribeOrderableDBInstanceOptions
+                  - sns:ListSubscriptionsByTopic
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - lambda:invokefunction
+                  - lambda:listfunctions
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - s3:ListBucket
+                  - s3:GetBucketPolicy
+                  - s3:GetObjectAcl
+                  - s3:PutObjectAcl
+                  - s3:DeleteObject
+                Resource: arn:aws:s3:::*
+                Effect: Allow
+              - Action:
+                - codecommit:GetBranch
+                - codecommit:GetCommit
+                - codecommit:UploadArchive
+                - codecommit:GetUploadArchiveStatus
+                - codecommit:CancelUploadArchive
+                Resource: !Sub arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${SourceRepo}
+                Effect: Allow
+              - Action:
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                  - codebuild:BatchGetProjects
+                  - codebuild:BatchGetBuilds
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - ecr:DescribeImages
+                Effect: Allow
+                Resource: '*'
+              - Action:
+                - iam:GetRole
+                - iam:PassRole
+                Effect: Allow
+                Resource:
+                  - '*'
+
+  CodeCFRole:
+      Type: AWS::IAM::Role
+      Properties:
+          RoleName: !Sub ${AWS::StackName}-cloudformation
+          AssumeRolePolicyDocument:
+            Statement:
+            - Effect: Allow
+              Principal:
+                Service: cloudformation.amazonaws.com
+              Action:
+              - sts:AssumeRole
+          Path: "/"
+          Policies:
+          - PolicyName: !Sub ${AWS::StackName}-cloudformation
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+              - Action:
+                - cloudformation:CreateStack
+                - cloudformation:UpdateStack
+                - cloudformation:DescribeStackEvents
+                - cloudformation:SetStackPolicy
+                Resource:
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${RcStackName}/*
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProdStackName}/*
+                Effect: Allow
+              - Action:
+                - cloudformation:CreateStack
+                Resource:
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${RcStackName}
+                - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProdStackName}
+                Effect: Allow
+              - Action:
+                - cloudformation:DescribeStacks
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                - ecs:*
+                - ecr:*
+                - route53:ChangeResourceRecordSets
+                - route53:Describe*
+                - route53:Get*
+                - servicediscovery:*
+                - autoscaling:*                   # Remove
+                - application-autoscaling:*
+                - iam:AttachRolePolicy            
+                - iam:CreateRole
+                - iam:DeleteRole
+                - iam:PutRolePolicy
+                - iam:UpdateAssumeRolePolicy
+                - elasticloadbalancing:CreateRule 
+                - elasticloadbalancing:DeleteRule 
+                - elasticloadbalancing:CreateTargetGroup
+                - elasticloadbalancing:DeleteTargetGroup 
+                - elasticloadbalancing:ModifyRule 
+                - elasticloadbalancing:ModifyTargetGroup 
+                - elasticloadbalancing:ModifyTargetGroupAttributes 
+                - elasticloadbalancing:SetRulePriorities
+                - elasticloadbalancing:Describe*
+                - events:* 
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                - iam:GetRole
+                - iam:PassRole
+                - iam:DeleteRolePolicy 
+                Effect: Allow
+                Resource:
+                  - '*'
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-codebuild
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub ${AWS::StackName}-codebuild
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - ecr:SetRepositoryPolicy
+            - ecr:BatchCheckLayerAvailability
+            - ecr:GetDownloadUrlForLayer
+            - ecr:GetRepositoryPolicy
+            - ecr:DescribeRepositories
+            - ecr:ListImages
+            - ecr:DescribeImages
+            - ecr:BatchGetImage
+            - ecr:InitiateLayerUpload
+            - ecr:UploadLayerPart
+            - ecr:CompleteLayerUpload
+            - ecr:PutImage
+            Effect: Allow
+            Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepo}
+          - Action:
+            - ecr:GetAuthorizationToken
+            Effect: Allow
+            Resource: '*'
+          - Action:
+            - s3:GetObject
+            - s3:GetObjectVersion
+            - s3:PutObject
+            Resource: 
+              - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codebuild/*
+              - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codepipeline/*
+            Effect: Allow
+          - Action:
+            - s3:GetBucketVersioning
+            Resource: 
+              - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codebuild
+              - !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-codepipeline
+            Effect: Allow
+          - Sid: AllowAllEc2Actions
+            Action: "ec2:*"
+            Resource: "*"
+            Effect: Allow
+          - Sid: CloudWatchLogsPolicy
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+          - Sid: CodeCommitPullPolicy
+            Effect: Allow
+            Action:
+               - codecommit:GitPull
+            Resource:
+              - '*'
+          - Sid: GetSsmParameters
+            Effect: Allow
+            Action: 
+              - ssm:GetParameters
+              - ssm:GetParametersByPath
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NameSpace}/*
+          - Sid: DescribeAllSsmParameters
+            Effect: Allow
+            Action:
+              - ssm:DescribeParameters
+            Resource: '*'
+          - Sid: EncryptSsmKeys
+            Effect: Allow
+            Action:
+              - kms:ListKeys
+              - kms:ListAliases
+              - kms:Describe*
+              - kms:Decrypt
+            Resource: '*'
+          - Sid: AllowUploadStatic
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource: 
+              - !Sub arn:${AWS::Partition}:s3:::${StaticBucketName}/*
+
+  PipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-codepipeline
+
+  LogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: !Ref AWS::StackName
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: 
+      - InvoicegenPipeline
+      - CodeBuildRole
+      - LogGroup
+    Properties:
+      Description: This project creates the Invoicegen docker Images and pushes them to ECR
+      Name: !Sub ${AWS::StackName}-build
+      Artifacts:
+        Type: CODEPIPELINE
+#  Encryption is only used when we have Artifact Outputs to S3
+#      EncryptionKey:
+#        Fn::ImportValue:
+#          !Sub ${EnvironmentName}-InvoicegenKey-CMK-Arn
+      BadgeEnabled: false
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_CUSTOM_CACHE
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_SOURCE_CACHE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: !Ref CodeBuildDockerImage
+        PrivilegedMode: true
+        EnvironmentVariables: 
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepo}
+          - Name: BUILD_DOCKER_FILE
+            Value: !Ref BuildDockerFile
+          - Name: BUILD_WEB_DOCKER_FILE
+            Value: !Ref BuildWebDockerFile
+          - Name: APP_STAGE
+            Value: prod
+          - Name: AWS_ENV_PATH
+            Value: !Ref SSMParametersPath
+      LogsConfig:
+        CloudWatchLogs:
+          Status:  ENABLED
+          GroupName: !Ref AWS::StackName
+          StreamName: !Sub ${AWS::StackName}-build
+      ServiceRole: !Sub ${AWS::StackName}-codebuild
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: build_spec.yml
+      Tags:
+        - Key: Name
+          Value: Codebuild
+      TimeoutInMinutes: !Ref TimeoutInMinutes
+      VpcConfig:
+        VpcId:
+          Fn::ImportValue: !Sub ${ParentVPCStack}-VPC
+        Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentVPCStack}-SubnetsPrivate'}]
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${ClusterStackName}-SecurityGroup        
+
+  InvoicegenPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: 
+      - PipelineBucket
+    Properties:
+      Name: !Sub ${AWS::StackName}
+      ArtifactStore:
+        Location: !Sub ${AWS::StackName}-codepipeline
+        Type: S3
+      RestartExecutionOnUpdate: true
+      RoleArn: !GetAtt CodePipelineRole.Arn
+# Source Stage Definition
+      Stages:
+        - Name: Source
+          Actions:
+            Fn::If:
+            - HasS3Artifact
+            - - Name: SourceActionS
+                ActionTypeId:
+                  Category: Source
+                  Owner: AWS
+                  Version: '1'
+                  Provider: CodeCommit
+                InputArtifacts: []
+                OutputArtifacts:
+                  - Name: Invoiceapp
+                Configuration:
+                  RepositoryName: !Ref SourceRepo
+                  BranchName: !Ref SourceBranch
+                RunOrder: 1
+              - Name: GetS3Artifacts
+                ActionTypeId:
+                  Category: Source
+                  Owner: AWS 
+                  Version: '1'
+                  Provider: S3
+                InputArtifacts: []
+                OutputArtifacts:
+                  - Name: S3Artifact
+                Configuration:
+                  S3Bucket: !Ref SourceArtifactBucket
+                  S3ObjectKey: !Ref SourceArtifactKey
+                  PollForSourceChanges: true
+                RunOrder: 2
+            
+            - - Name: SourceAction
+                ActionTypeId:
+                  Category: Source
+                  Owner: AWS
+                  Version: '1'
+                  Provider: CodeCommit
+                InputArtifacts: []
+                OutputArtifacts:
+                  - Name: Invoiceapp
+                Configuration:
+                  RepositoryName: !Ref SourceRepo
+                  BranchName: !Ref SourceBranch
+                RunOrder: 1
+
+# Build Stage Definition
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              InputArtifacts:
+                Fn::If:
+                - HasS3Artifact
+                - - Name: S3Artifact
+                  - Name: Invoiceapp
+                -
+                  - Name: Invoiceapp
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Sub ${AWS::StackName}-build
+                PrimarySource: !If [HasS3Artifact, Invoiceapp, !Ref "AWS::NoValue"]
+              #RoleArn:
+              #  Fn::ImportValue:
+              #    !Sub ${AWS::StackName}-codepipeline-Arn
+              RunOrder: 1
+# Deploy 
+        - Name: Deploy
+          Actions:
+            - Name: DeployToRC
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt [CodeCFRole, Arn]
+                StackName: !Sub ${RcStackName}
+                TemplatePath: "BuildOutput::rc_service.template"
+              RunOrder: 1
+            - Name: Approve
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Version: '1'
+                Provider: Manual
+              Configuration:
+                CustomData: Approve deployment to production
+              RunOrder: 2
+            - Name: DeployToProd
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt [CodeCFRole, Arn]
+                StackName: !Sub ${ProdStackName}
+                TemplatePath: "BuildOutput::service.template"
+              RunOrder: 3
+#            - Name: DeployGenerator
+#              ActionTypeId:
+#                Category: Deploy
+#                Owner: AWS
+#                Version: 1
+#                Provider: ECS
+#              Configuration:
+#                ClusterName:
+#                  Fn::ImportValue:
+#                    !Sub ${ClusterStackName}-Cluster
+#                ServiceName: invoice_generator
+#                FileName: service_def_generator.json
+#              InputArtifacts:
+#                - Name: BuildOutput
+#              #RoleArn:
+#              #  Fn::ImportValue:
+#              #    !Sub ${AWS::StackName}-codepipeline-Arn
+#              RunOrder: 1
+
+
+
+
+Outputs:
+  Codepipeline:
+    Description: Name of the Codepipeline pipeline
+    Value: !Ref InvoicegenPipeline

@@ -1,0 +1,70 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MU scheduled task in a specific environment containing a CloudWatch event and a RuleTarget
+Parameters:
+  ParentClusterStack:
+    Type: String
+    Description: Name of the value to import for Ecs Cluster to deploy to.
+  ParentServiceStack:
+    Type: String
+    Description: Name of the value to import for Ecs Service to deploy to.
+  ScheduleExpression:
+    Type: String
+    Description: Timespec cron(* * * * ? *) or rate(timespec) of scheduled task
+    Default: "rate(5 minutes)"
+  ScheduleCommand:
+    Type: String
+    Description: The command override as a JSON object (should be a JSON array)
+    Default: '["ls","-la"]'
+  ServiceName:
+    Type: String
+    Description: Name of service
+    Default: main-schedule
+  Image:
+    Description: 'The image to use for a container, which is passed directly to the Docker daemon. You can use images in the Docker Hub registry or specify other repositories (repository-url/image:tag).'
+    Type: String
+    Default: jesus10/helloworld
+Resources:
+  ScheduleTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: !Sub ${AWS::StackName}-schedule
+      NetworkMode: awsvpc
+      RequiresCompatibilities: 
+        - FARGATE
+      ExecutionRoleArn: {'Fn::ImportValue': !Sub '${ParentServiceStack}-EcsTaskRole-Arn'}
+      TaskRoleArn: {'Fn::ImportValue': !Sub '${ParentServiceStack}-EcsTaskRole-Arn'}
+      Cpu: 512
+      Memory: 4GB
+      ContainerDefinitions:
+      - Name: main-schedule # if you change this, you also must change the AWS::ECS::Service
+        Image: !Ref Image
+        #Memory: 3000
+        MemoryReservation: 1500
+        Ulimits:
+          - HardLimit: 135000
+            Name: nofile
+            SoftLimit: 135000
+        Essential: true
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            'awslogs-region': !Ref 'AWS::Region'
+            'awslogs-group': {'Fn::ImportValue': !Sub '${ParentClusterStack}-LogGroup'}
+            'awslogs-stream-prefix': !Ref 'ParentClusterStack'
+  ScheduledRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      ScheduleExpression: !Sub ${ScheduleExpression}
+      State: ENABLED
+      Targets:
+      - Id: ScheduleRuleId
+        Arn:
+          Fn::Sub:
+            - "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ParentClusterStack}"
+            - EcsClusterName: !Ref 'ParentClusterStack'
+        RoleArn: {'Fn::ImportValue': !Sub '${ParentServiceStack}-EcsEventsRole-Arn'}
+        Input: !Sub '{ "containerOverrides": [ { "name": "${ServiceName}", "command": ${ScheduleCommand} } ] }'
+        EcsParameters:
+          TaskDefinitionArn: !Ref ScheduleTaskDefinition
+          TaskCount: 1

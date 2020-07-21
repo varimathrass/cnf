@@ -1,0 +1,233 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  CloudTrailLifecycleEnabled:
+    Type: String
+    Default: Disabled
+    Description: When enabled, CloudTrail logs will be first moved to Glacier and then deleted after a period of time
+    AllowedValues: ["Enabled", "Disabled"]
+
+  CloudTrailDaysToGlacier:
+    Type: Number
+    Description: Days before CloudTrail logs are moved to Glacier
+    Default: 365
+
+  CloudTrailDaysToDelete:
+    Type: Number
+    Description: Days before CloudTrail logs are deleted
+    Default: 731
+
+  # Config lifecycle
+
+  ConfigLifecycleEnabled:
+    Type: String
+    Default: Disabled
+    Description: When enabled, AWS Config snapshots will be first moved to Glacier and then deleted after a period of time
+    AllowedValues: ["Enabled", "Disabled"]
+
+  ConfigDaysToGlacier:
+    Type: Number
+    Description: Days before AWS Config snapshots are moved to Glacier
+    Default: 365
+
+  ConfigDaysToDelete:
+    Type: Number
+    Description: Days before AWS Config snapshots are deleted
+    Default: 731
+
+Resources:
+
+
+  ##############
+  # CloudTrail #
+  ##############
+
+  CloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'cloudtrail-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: CloudTrailLifecycle
+            ExpirationInDays: !Ref CloudTrailDaysToDelete
+            Status: !Ref CloudTrailLifecycleEnabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: !Ref CloudTrailDaysToGlacier
+  
+  BucketPolicy: 
+    Type: AWS::S3::BucketPolicy
+    Properties: 
+      Bucket: 
+        Ref: CloudTrailBucket
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Sid: "AWSCloudTrailAclCheck"
+            Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Action: "s3:GetBucketAcl"
+            Resource: 
+              !Sub |-
+                arn:aws:s3:::${CloudTrailBucket}
+          - 
+            Sid: "AWSCloudTrailWrite"
+            Effect: "Allow"
+            Principal: "*"
+            Action: "s3:PutObject"
+            Resource:
+              !Sub |-
+                arn:aws:s3:::${CloudTrailBucket}/AWSLogs/${AWS::AccountId}/*
+
+  CloudTrailRole:
+    Type: AWS::IAM::Role
+    Properties:
+        RoleName: !Sub ${AWS::StackName}-cloudtrail
+        AssumeRolePolicyDocument:
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - cloudtrail.amazonaws.com
+            Action:
+            - sts:AssumeRole
+        Path: "/"
+        Policies:
+        - PolicyName: !Sub ${AWS::StackName}-cloudtrail-self
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AWSCloudTrailCreateLogStream2014110
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${CloudTrailLogGroup}:log-stream:*
+              - Sid: AWSCloudTrailPutLogEvents20141101
+                Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${CloudTrailLogGroup}:log-stream:*
+
+
+  CloudTrailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: cloudtrail-log-main
+      RetentionInDays: 365
+
+  CloudTrail: 
+    DependsOn: 
+      - BucketPolicy
+    Type: AWS::CloudTrail::Trail
+    Properties: 
+      S3BucketName: 
+        Ref: CloudTrailBucket
+      IsLogging: true
+      EnableLogFileValidation: true
+      IncludeGlobalServiceEvents: true
+      IsMultiRegionTrail: true
+      CloudWatchLogsRoleArn: !GetAtt CloudTrailRole.Arn
+      CloudWatchLogsLogGroupArn: !GetAtt CloudTrailLogGroup.Arn
+
+
+   ##########
+   # Config #
+   ##########
+
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'config-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ConfigLifecycle
+            ExpirationInDays: !Ref ConfigDaysToDelete
+            Status: !Ref ConfigLifecycleEnabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: !Ref ConfigDaysToGlacier
+      Tags:
+        - { Key: Environment, Value: security }
+ 
+  ConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - config.amazonaws.com
+            Action:
+              - s3:GetBucketAcl
+            Resource:
+              - !Sub 'arn:aws:s3:::${ConfigBucket}'
+          -
+            Sid: PutObject
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:PutObject
+            Resource:
+              - !Sub 'arn:aws:s3:::${ConfigBucket}/AWSLogs/${AWS::AccountId}/*'
+ 
+  ConfigPolicy:
+   Type: AWS::IAM::ManagedPolicy
+   Properties:
+     PolicyDocument:
+       Version: 2012-10-17
+       Statement:
+         -
+           Effect: Allow
+           Action:
+             - s3:PutObject
+           Resource:
+             - !Sub 'arn:aws:s3:::${ConfigBucket}/AWSLogs/${AWS::AccountId}/*'
+           Condition:
+             StringLike:
+               s3:x-amz-acl: bucket-owner-full-control
+         -
+           Effect: Allow
+           Action:
+             - s3:GetBucketAcl
+           Resource:
+             - !Sub 'arn:aws:s3:::${ConfigBucket}'
+
+  ConfigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSConfigRole
+        - !Ref ConfigPolicy
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action:
+             - sts:AssumeRole
+
+Outputs:
+  CloudTrailBucket:
+    Value: !Ref CloudTrailBucket
+    Export:
+      Name: 'CloudTrail:Bucket'
+
+  ConfigBucket:
+    Value: !Ref ConfigBucket
+    Export:
+      Name: 'Config:Bucket'

@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Metadata: 
+  License: Apache-2.0
+Description: 'AWS CloudFormation Template for CodeCommit repo'
+Parameters:
+  RepoName:
+    Description: CodeCommit repo name
+    Type: String
+  EnableEcr:
+    Description: Ecr repo Condition
+    Type: String
+    Default: "false"
+  RepositoryDescription:
+    Description: CodeCommit repo description
+    Type: String
+    Default: "Repo"
+
+Conditions:
+  IsEnableEcr:
+    "Fn::Equals":
+      - !Ref EnableEcr
+      - 'true'
+
+Resources:
+  CodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties: 
+      RepositoryDescription: !Ref RepositoryDescription
+      RepositoryName: !Ref RepoName
+
+  EcrRepo: 
+    Type: AWS::ECR::Repository
+    Condition: IsEnableEcr
+    Properties: 
+      RepositoryName: !Ref RepoName
+      LifecyclePolicy:
+        LifecyclePolicyText:
+          !Sub |
+            {
+              "rules": [
+                {
+                  "rulePriority": 1,
+                  "description": "Delete untagged",
+                  "selection": {
+                    "tagStatus": "untagged",
+                    "countType": "sinceImagePushed",
+                    "countUnit": "days",
+                    "countNumber": 1
+                  },
+                  "action": {
+                    "type": "expire"
+                  }
+                },
+                {
+                  "rulePriority": 2,
+                  "description": "Expire all old images",
+                  "selection": {
+                    "tagStatus": "any",
+                    "countType": "imageCountMoreThan",
+                    "countNumber": 200
+                  },
+                  "action": {
+                    "type": "expire"
+                  }
+                }
+              ]
+            }
+Outputs:
+  Name: 
+    Value: !GetAtt CodeCommit.Name
+    Description: Repo name
+  Arn:
+    Value: !GetAtt CodeCommit.Arn
+    Description: Repo arn
+  CloneUrlSsh:
+    Value: !GetAtt CodeCommit.CloneUrlSsh
+    Description: Ssh repo url
+  CloneUrlHttp:
+    Value: !GetAtt CodeCommit.CloneUrlHttp
+    Description: Http repo url
+  EcrArn:
+    Value:
+      Fn::If:
+      - IsEnableEcr
+      - !GetAtt EcrRepo.Arn
+      - ''

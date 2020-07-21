@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Metadata: 
+  License: Apache-2.0
+Description: 'AWS CloudFormation Template S3_Website_Bucket_With_Retain_On_Delete'
+Parameters:
+  bucketName:
+    Description: Bucket name for static hosting
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '\A([a-z0-9]+(-[a-z0-9]+)*\.|-|[a-z0-9])+[a-z]{2,}\Z'
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref bucketName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: 
+              - GET
+            AllowedOrigins:
+              - !Ref bucketName
+    DeletionPolicy: Retain
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref bucketName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: PublicReadForGetBucketObjects
+            Action:
+              - "s3:GetObject"
+            Effect: "Allow"
+            Resource: !Sub arn:aws:s3:::${bucketName}/*
+            Principal: "*"
+Outputs:
+  WebsiteURL:
+    Value: !GetAtt S3Bucket.WebsiteURL
+    Description: URL for website hosted on S3
+  S3BucketSecureURL:
+    Value: !Join ['', ['https://', !GetAtt [S3Bucket, DomainName]]]
+    Description: Name of S3 bucket to hold website content

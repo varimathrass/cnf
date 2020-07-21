@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates a AWS Batch environment, includes IAM resources and Batch resources.
+Parameters:
+  #Environment:
+  #  Type: String
+  #  Description: 'Environment Name'
+  #  Default: Dev
+  #queueName:
+  #  Type: String
+  #  Description: 'Name of Queue to be created'
+  #  Default: MyQueue
+  
+  vPCCidr:
+    Type: String
+    Description: 'Cidr Block of the VPC, allows for ssh access internally.'
+    Default: '0.0.0.0/0'
+    MinLength: "9"
+    MaxLength: "18"
+    AllowedPattern: "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+    ConstraintDescription: "Must be valid CIDR notation (i.e. x.x.x.x/x)."
+  
+  parentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+  
+  aMI:
+    Type: AWS::EC2::Image::Id
+    Description: 'AMI to use for Compute Environment'
+    Default: ami-07c916f51e03b3fc6 #ami-0acc9f8be17a41897
+
+  maxvCpus:
+    Type: String
+    Description: The maximum number of EC2 vCPUs that an environment can reach.
+    Default: 2
+
+  minvCpus:
+    Type: String
+    Description: The minimum number of EC2 vCPUs that an environment should maintain.
+    Default: 1
+
+  desiredvCpus:
+    Type: String
+    Description: The desired number of EC2 vCPUS in the compute environment. AWS Batch modifies this value between the minimum and maximum values, based on job queue demand.
+    Default: 1
+
+  lowPriorityQueue:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+
+  middlePriorityQueue:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+  spotInstances:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+
+Conditions:
+  HasLowPriorityQueue: !Not [!Equals [!Ref lowPriorityQueue, 'false']]
+  HasMiddlePriorityQueue: !Not [!Equals [!Ref middlePriorityQueue, 'false']]
+  HasSpot: !Not [!Equals [!Ref spotInstances, 'false']]
+
+Resources:
+  BatchEventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-ecs-events
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - events.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub ${AWS::StackName}-ecs-task
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - batch:SubmitJob
+            Resource: "*"  
+  
+  BatchServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - 
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'batch.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole'
+  
+  BatchInstanceIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-service-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - 
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role' #AmazonECSTaskExecutionRolePolicy
+  
+  BatchEC2SpotFleetRole:
+    Condition: HasSpot
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - spotfleet.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole
+      Path: /
+
+  BatchInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties: 
+      Path: /
+      Roles:
+        - !Ref BatchInstanceIAMRole
+      InstanceProfileName: !Sub ${AWS::StackName}-profile
+  
+  BatchSecGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties: 
+      GroupDescription: BatchGroup
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: '-1'
+      SecurityGroupIngress:
+        - CidrIp: !Ref vPCCidr
+          IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+      VpcId:
+        Fn::ImportValue: !Sub ${parentVPCStack}-VPC
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties: 
+      LaunchTemplateData:
+        UserData: 
+          'Fn::Base64': !Sub |
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+            
+            --==MYBOUNDARY==
+            Content-Type: text/x-shellscript; charset="us-ascii"
+            
+            #!/bin/bash
+            echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=1m >> /etc/ecs/ecs.config
+            
+            --==MYBOUNDARY==--
+      LaunchTemplateName: !Sub "${AWS::StackName}-ami-upgrade"
+ 
+  BatchCompute:
+    DependsOn: LaunchTemplate
+    Type: "AWS::Batch::ComputeEnvironment"
+    Properties:
+      Type: Managed
+      ServiceRole: !Ref BatchServiceRole
+      #ComputeEnvironmentName: !Sub ${AWS::StackName}-Environment # Custom name resource
+      ComputeResources: 
+        SecurityGroupIds: 
+          - !Ref BatchSecGroup
+        Subnets: !Split [',', {'Fn::ImportValue': !Sub '${parentVPCStack}-SubnetsPrivate'}]
+        Type: !If [HasSpot, "SPOT", "ec2"]
+        SpotIamFleetRole: !If [HasSpot, !Ref BatchEC2SpotFleetRole, !Ref 'AWS::NoValue']
+        LaunchTemplate:
+          LaunchTemplateId: !Ref LaunchTemplate
+        MaxvCpus: !Ref maxvCpus
+        MinvCpus: !Ref minvCpus
+        DesiredvCpus: !Ref desiredvCpus
+        ImageId: !Ref aMI
+        InstanceRole: !Ref BatchInstanceProfile
+        Tags: {"Name": !Sub "${AWS::StackName}-instance"}
+        InstanceTypes:
+          - c5.large
+      State: ENABLED
+  
+  JobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      Priority: 100
+      State: "ENABLED"
+      JobQueueName: !Sub ${AWS::StackName}-JobQueue
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref 'BatchCompute'
+
+  JobQueueMiddle:
+    Condition: HasMiddlePriorityQueue
+    Type: AWS::Batch::JobQueue
+    Properties:
+      Priority: 30
+      State: "ENABLED"
+      JobQueueName: !Sub ${AWS::StackName}-JobQueueMiddle
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref 'BatchCompute'
+
+  JobQueueLow:
+    Condition: HasLowPriorityQueue
+    Type: AWS::Batch::JobQueue
+    Properties:
+      Priority: 10
+      State: "ENABLED"
+      JobQueueName: !Sub ${AWS::StackName}-JobQueueLow
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref 'BatchCompute'
+
+Outputs:
+  ComputeEnvironmentArn:
+    Value: !Ref 'BatchCompute'
+  JobQueueArn:
+    Value: !Ref 'JobQueue'
+  BatchEventsRole:
+    Description: 'Ecs events role arn'
+    Value: !GetAtt BatchEventsRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BatchEventsRole-Arn'

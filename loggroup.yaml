@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates CloudWath LogGroup.
+Parameters:
+  logGroupName:
+    Type: String
+    Description: A name for the log group.
+    Default: Logs
+
+  retentionInDays:
+    Description: The number of days log events are kept in CloudWatch Logs. 
+    Type: Number
+    Default: 15
+
+Resources:  
+  CloudWatchLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref logGroupName
+      RetentionInDays: !Ref retentionInDays
+
+Outputs:
+  LogGroupName:
+    Value: !Ref 'logGroupName'
+  RetentionInDays:
+    Value: !Ref 'retentionInDays'

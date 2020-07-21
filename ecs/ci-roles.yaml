@@ -1,0 +1,197 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM roles and keys for pipeline 
+
+Parameters:
+  ParentCPStack:
+    Type: String
+    Description: Pipeline stack name
+  SourceRepo:
+    Type: String
+    Description: Source repo(both codecommit/ecr)
+
+Resources:
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+        RoleName: !Sub ${ParentCPStack}-codepipeline
+        AssumeRolePolicyDocument:
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - codepipeline.amazonaws.com
+            Action:
+            - sts:AssumeRole
+        Path: "/"
+        Policies:
+        - PolicyName: !Sub ${ParentCPStack}-codepipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+                - s3:PutObject
+                Resource: 
+                  - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codebuild/*
+                  - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codepipeline/*
+                Effect: Allow
+              - Action:
+                - s3:GetBucketVersioning
+                Resource: 
+                  - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codebuild
+                  - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codepipeline
+                Effect: Allow
+              - Action:
+                  - elasticbeanstalk:CreateApplicationVersion
+                  - elasticbeanstalk:DescribeApplicationVersions
+                  - elasticbeanstalk:DescribeEnvironments
+                  - elasticbeanstalk:DescribeEvents
+                  - elasticbeanstalk:UpdateEnvironment
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeLaunchConfigurations
+                  - autoscaling:DescribeScalingActivities
+                  - autoscaling:ResumeProcesses
+                  - autoscaling:SuspendProcesses
+                  - cloudformation:GetTemplate
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:UpdateStack
+                  - ec2:DescribeInstances
+                  - ec2:DescribeImages
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeKeyPairs
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - rds:DescribeDBInstances
+                  - rds:DescribeOrderableDBInstanceOptions
+                  - sns:ListSubscriptionsByTopic
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - lambda:invokefunction
+                  - lambda:listfunctions
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - s3:ListBucket
+                  - s3:GetBucketPolicy
+                  - s3:GetObjectAcl
+                  - s3:PutObjectAcl
+                  - s3:DeleteObject
+                Resource: arn:aws:s3:::*
+                Effect: Allow
+              - Action:
+                - codecommit:GetBranch
+                - codecommit:GetCommit
+                - codecommit:UploadArchive
+                - codecommit:GetUploadArchiveStatus
+                - codecommit:CancelUploadArchive
+                Resource: !Sub arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${SourceRepo}
+                Effect: Allow
+              - Action:
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                  - codebuild:BatchGetProjects
+                  - codebuild:BatchGetBuilds
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - ecr:DescribeImages
+                Effect: Allow
+                Resource: '*'
+              - Action:
+                  - iam:GetRole
+                  - iam:PassRole
+                Effect: Allow
+                Resource:
+                  - '*'
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ParentCPStack}-codebuild
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub ${ParentCPStack}-codebuild
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - ecr:SetRepositoryPolicy
+            - ecr:BatchCheckLayerAvailability
+            - ecr:GetDownloadUrlForLayer
+            - ecr:GetRepositoryPolicy
+            - ecr:DescribeRepositories
+            - ecr:ListImages
+            - ecr:DescribeImages
+            - ecr:BatchGetImage
+            - ecr:InitiateLayerUpload
+            - ecr:UploadLayerPart
+            - ecr:CompleteLayerUpload
+            - ecr:PutImage
+            Effect: Allow
+            Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${SourceRepo}
+          - Action:
+            - ecr:GetAuthorizationToken
+            Effect: Allow
+            Resource: '*'
+          - Action:
+            - s3:GetObject
+            - s3:GetObjectVersion
+            - s3:PutObject
+            Resource: 
+              - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codebuild/*
+              - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codepipeline/*
+            Effect: Allow
+          - Action:
+            - s3:GetBucketVersioning
+            Resource: 
+              - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codebuild
+              - !Sub arn:${AWS::Partition}:s3:::${ParentCPStack}-codepipeline
+            Effect: Allow
+          - Sid: AllowAllEc2Actions
+            Action: "ec2:*"
+            Resource: "*"
+            Effect: Allow
+          - Sid: CloudWatchLogsPolicy
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+          - Sid: CodeCommitPullPolicy
+            Effect: Allow
+            Action:
+               - codecommit:GitPull
+            Resource:
+              - '*'
+
+Outputs:
+  CodePipelineRole: 
+    Description: 'CodePipelineRole Arn'
+    Value: !GetAtt CodePipelineRole.Arn
+    Export:
+      Name: !Sub '${ParentCPStack}-codepipeline-Arn'
