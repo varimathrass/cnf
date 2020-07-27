@@ -50,7 +50,7 @@ Resources:
         Iops: 0
         VolumeSize: !Ref ebsVolumeSize
         VolumeType: "gp2"
-      ElasticsearchVersion: "5.6"
+      ElasticsearchVersion: !Ref elasticsearchVersion
       SnapshotOptions: 
         AutomatedSnapshotStartHour: "0"
       AccessPolicies: 
