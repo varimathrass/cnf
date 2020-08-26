@@ -60,6 +60,26 @@ Resources:
                   - refs/heads/stage
                   - refs/heads/mobi-stage
           -
+            Sid: CodeCommitCreateRepoPower
+            Effect: Allow
+            Action:
+              - codecommit:CreateRepository
+              - codecommit:TagResource
+            Resource: 
+              - 'arn:aws:codecommit:eu-west-1:278900400641:dev-*'
+              - 'arn:aws:codecommit:eu-west-1:278900400641:lib-*'
+              - 'arn:aws:codecommit:eu-west-1:278900400641:service-*'
+              - 'arn:aws:codecommit:eu-west-1:278900400641:citrus-*'
+              - 'arn:aws:codecommit:eu-west-1:278900400641:archive-*'
+            # Condition:
+            #   StringEquals:
+            #     codecommit:References:
+            #       - refs/heads/dev*
+            #       - refs/heads/service*
+            #       - refs/heads/lib*
+            #       - refs/heads/archive*
+            #       - refs/heads/citrus*
+          -
             Sid: SSMReadOnlyAllPower
             Effect: Allow
             Action: 
@@ -149,11 +169,33 @@ Resources:
             Effect: Allow
             Action:
               - lambda:GetAccountSettings
+              - lambda:GetFunctionConfiguration
+              - lambda:GetPolicy
+              - lambda:GetFunction
+              - lambda:GetAlias
               - lambda:ListFunctions
               - lambda:ListTags
               - lambda:GetEventSourceMapping
               - lambda:ListEventSourceMappings
               - iam:ListRoles
+              - lambda:GetLayerVersion
+              - lambda:ListTags
+            Resource: '*'
+          - 
+            Sid: WriteAccessToLambda
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:CreateAlias
+              - lambda:UpdateAlias
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:UpdateFunctionEventInvokeConfig
+              - lambda:InvokeAsync
+              - lambda:InvokeFunction
+              - lambda:TagResource
+              - lambda:PublishVersion
+              - lambda:PublishLayerVersion
             Resource: '*'
           - 
             Sid: ReadAccessToApiGateway

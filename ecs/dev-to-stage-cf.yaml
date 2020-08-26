@@ -59,7 +59,7 @@ Parameters:
 
   AppStage:
     Type: String
-    Default: 'stage'
+    Default: 'stage2'
 
   BuildSpecFileName:
     Type: String
